@@ -1,0 +1,174 @@
+
+
+
+
+from jsonrpclib.SimpleJSONRPCServer import SimpleJSONRPCServer
+from os.path import dirname, join, abspath
+import sys
+sys.path.append(dirname(abspath(__file__)))
+sys.path.append(join(dirname(abspath(__file__)), 'yidong'))
+from sence import *
+from robot_api import *
+from pos_obj_map import *
+import numpy as np
+import threading
+from pos_obj_map import *
+
+lock=threading.Lock()
+flag=0
+def pointmove(x, y):
+    flag=1
+    lock.acquire()
+    drive_to_position(sence,[x/2,y/2])
+    lock.release()
+    images=_get_images()
+    result={"state":1,"info":"pointmove success","images":images}
+    flag=0
+    return result
+
+def placemove(place:str):
+    flag=1
+    lock.acquire()
+    try:
+        pos=positionmap[place]                                      
+        car_pos=sence.car.get_2d_pose()
+        path=getpath(int(round(car_pos[0])*2),int(round(car_pos[1])*2),int(pos[0]),int(pos[1]))
+        sequence_move(pathtrans(path))
+    except (KeyError):
+        lock.release()
+        flag=0
+        return {"state":-1,"info":"无效的语义地点"}
+    lock.release()
+    flag=0
+    images=_get_images()
+    result={"state":1,"info":"pathmove success","images":images}
+    return result
+
+def pathmove(positions:list):
+    flag=1
+    lock.acquire()
+    sequence_move(sence,positions)
+    lock.release()
+    flag=0
+    images=_get_images()
+    result={"state":1,"info":"pathmove success","images":images}
+    return result
+
+
+def grasp(eepos:list):
+    if(len(eepos)<3):
+        return {"state":-1,"info":"fail, need 3D position"}
+    flag=1
+    lock.acquire()
+    try:
+        move_arm(sence,eepos[0:3],euler=[0,0,0])
+    except Exception:
+        print(Exception)
+        return {"state":-1,"info":"fail, cant create armpath"}
+    obj=sence.gripper._proximity_sensor.get_detected_object()
+    if(obj):
+        graspload(sence,obj)
+    else:
+        target_pos=Dummy("youBot_target").get_position()
+        move_arm(sence,target_pos,euler=[0,0,0])
+        lock.release()
+        return {"state":-1,"info":"fail, cant detected object"}
+    lock.release()
+    flag=0
+    images=_get_images()
+    result={"state":1,"info":"grasp success","images":images}
+    return result
+
+def _get_images():
+    flag=1
+    lock.acquire()
+    images=[]
+    for vision in sence.vision:      
+        image=vision.capture_rgb()
+        dimg=vision.capture_depth()
+        dimg=dimg.reshape(dimg.shape[0],-1,1)
+        image=np.concatenate((image, dimg), axis=2)
+        image=image.tolist()
+        images.append(image)
+    lock.release()
+    flag=0
+    return images
+
+def get_images():
+    flag=1
+    lock.acquire()
+    images=[]
+    for vision in sence.vision:      
+        image=vision.capture_rgb()
+        dimg=vision.capture_depth()
+        dimg=dimg.reshape(dimg.shape[0],-1,1)
+        image=np.concatenate((image, dimg), axis=2)
+        image=image.tolist()
+        images.append(image)
+    lock.release()
+    flag=0
+    result={"state":1,"info":"success","images":images}
+    return result
+
+def get_depth():
+    flag=1
+    lock.acquire()
+    depth=sence.vision[0].capture_depth().tolist()
+    result={"depth":depth}
+    lock.release()
+    flag=0   
+    return result
+
+def get_vision_args():
+    flag=1
+    lock.acquire()
+    v1=sence.vision[0]
+    a=v1.get_position().tolist()
+    b=v1.get_orientation().tolist()
+    c=v1.get_quaternion().tolist()
+    d=v1.get_resolution()
+    e=v1.get_perspective_angle()
+    vision_args={"position":a,
+        "orientation":b,
+        "quaternion":c,
+        "resolution":d,
+        "angle":e}
+    lock.release()
+    flag=0
+    return vision_args
+
+def step(sence1):
+    while(True and flag==0):
+        sence1.pr.step()
+
+if __name__ == '__main__':
+    SCENE_FILE = join(dirname(abspath(__file__)), 'warehouse6.ttt')
+    global sence
+    sence=Sence(SCENE_FILE)   
+    
+
+
+    # graspload(sence,Shape("cube_white"))
+    step_thread = threading.Thread(target=step,args=[sence])
+    step_thread.start()
+
+
+
+
+    json_rpc_server = SimpleJSONRPCServer(("localhost", 8000))
+    json_rpc_server.register_function(pointmove,"pointmove")
+    json_rpc_server.register_function(placemove,"placemove")
+    json_rpc_server.register_function(pathmove,"pathmove")
+    json_rpc_server.register_function(grasp,"grasp")
+    json_rpc_server.register_function(get_images,"get_images")
+    json_rpc_server.register_function(get_vision_args,"get_vision_args")
+    json_rpc_server.register_function(get_depth,"get_depth")
+    json_rpc_server.serve_forever()
+
+
+
+
+
+
+
+
